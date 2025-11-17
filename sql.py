@@ -77,3 +77,21 @@ def get_largest(para, cur, table):
         return int(lastSaved[0])
     except:
         return 0
+
+def get_array_from_column(table, column, cur):
+    try:
+        cur.execute(f"SELECT {column} FROM {table}")
+        values = cur.fetchall()
+        return [row[0] for row in values]
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+    
+def get_tuple_from_columns(table, column1, column2, cur):
+    try:
+        cur.execute(f"SELECT {column1}, {column2} FROM {table}")
+        values = cur.fetchall()
+        return [(row[0], row[1]) for row in values]
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
