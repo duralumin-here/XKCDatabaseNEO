@@ -7,75 +7,39 @@ from pathlib import Path
 
 import sql
 import data
-import utilities
 
 # ========== Main functions ==========
 
-def fill_metadata_fast(database, table):
-    # Retrieves the metadata for xkcd comics past the most recently stored (uses concurrent threading)
+def fill_metadata(database, table):
+    # Fills in the metadata for all comics not already filled in the table
     conn, cur, session = start_session(database)
-    prep_table_metadata(table, cur, conn)
-    # Only attempt to fill the ones not saved yet
-    last_saved = sql.get_largest("ComicID", cur, table)
-    conn.close()
-    last_posted = data.latest_comic()['num']
-    # Checks if the most recent comic number is actually a number
-    if type(last_posted) != type(1):
-        print("Error retrieving most recent xkcd comic: number not an integer")
-        return
-    print(f"Last saved comic: {last_saved}   |   Last posted comic: {last_posted}")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        retries = {executor.submit(get_and_store_metadata, id, session, database, table): id for id in range(last_saved + 1, last_posted + 1)}
-    # Retry more slowly if any are missed
-    for retry in retries:
-        get_and_store_metadata(retry, session, database, table)
-
-def fill_metadata_missing(database, table):
-    # Retrieves the metadata for xkcd comics missing in the database
-    _, cur, session = start_session(database)
-    ids = get_metadata_missing(table, cur)
+    prep_table_metadata(table, cur, conn) # Create table and columns if needed
+    ids = get_metadata_missing(table, cur) # Get IDs that don't have metadata filled
     if len(ids) == 0:
         print("All comics have metadata.")
         return
-    elif len(ids) < 50:
-        for id in ids:
-            get_and_store_metadata(id, session, database, table)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(get_and_store_metadata, id, session, database, table): id for id in ids}
+        retries = []
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result is not None: # Function returns comic ID when it fails
+                retries.append(result) 
+    fails = []
+    # Retry more slowly if any are missed
+    for retry in retries:
+        fails.append(get_and_store_metadata(retry, session, database, table))
+    if not fails:
+        print("Success! Metadata filled for all comics.")
     else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            retries = {executor.submit(get_and_store_metadata, id, session, database, table): id for id in ids}
-        # Retry more slowly if any are missed
-        for retry in retries:
-            get_and_store_metadata(retry, session, database, table)
-
-def fill_metadata_slow(database, table):
-    # Retrieves the metadata for xkcd comics past the most recently stored (no concurrent threading)
-    signal.signal(signal.SIGINT, utilities.handler(conn)) # Save before exiting if execution stops
-    conn, cur, session = start_session(database)
-    prep_table_metadata(table, cur, conn)
-    # Only attempt to fill the ones not saved yet
-    last_saved = sql.get_largest("ComicID", cur, table)
-    last_posted = data.latest_comic()['num']
-    # Checks if the most recent comic number is actually a number
-    if type(last_posted) != type(1):
-        print("Error retrieving most recent xkcd comic: number not an integer")
-        return
-    print(f"Last saved comic: {last_saved}   |   Last posted comic: {last_posted}")
-    for id in range(last_saved + 1, last_posted + 1):
-        print("Fetching information for xkcd " + str(id) + "...")
-        try:
-            params = get_metadata_params(id, session)
-            statement = sql.get_metadata_statement(table)
-            cur.execute(statement, params)
-        except Exception as e:
-            print(f"An error occurred while processing Comic {id}: {e}")
-            break
-    conn.commit()
+        print(f"Metadata was not filled for the following comics: {fails}")
+        
 
 def get_all_comic_imgs(database, table):
     conn, cur, session = start_session(database)
     rows = sql.get_tuple_from_columns(table, "ComicID", "ImgLink", cur)
     if not rows:
-        print("No data found.")
+        print("No data found in table.")
         return
     conn.close()
     Path("comic_images").mkdir(parents=True, exist_ok=True)
@@ -90,15 +54,14 @@ def get_all_comic_imgs(database, table):
         print("All images saved successfully.")
         return
     # Retry failed downloads
-    print(f"The following comics were not saved: {retries}\n\nThe system will try again.")
-    failed = []
+    fails = []
     for retry in retries:
-        failed.append(get_and_save_image(retry[0], retry[1], session))
-    if not failed:
+        fails.append(get_and_save_image(retry[0], retry[1], session))
+    if len(fails):
         print("All images saved successfully.")
         return
     print("The following comics were not saved:")
-    for fail in failed:
+    for fail in fails:
         print(fail)
 
 # ========== Helper functions ==========
@@ -125,6 +88,10 @@ def get_metadata_params(id, session):
     else:
         comic = data.get_comic(id, session)
         return (id, comic['title'], format_date(comic), comic['img'], comic['alt'])
+
+def format_date(comic):
+    # Returns the formated date from an xkcd comic
+    return f"{int(comic['year']):04d}-{int(comic['month']):02d}-{int(comic['day']):02d}"
 
 def get_metadata_missing(table, cur):
     # Returns a list of each ComicID in the table that hasn't been added by metadata
@@ -184,7 +151,3 @@ def id_img_check(id, url):
         return "https://www.explainxkcd.com/wiki/images/c/ce/garden.png"
     else:
         return url
-
-def format_date(comic):
-    # Returns the formated date from an already retrieved xkcd comic
-    return f"{int(comic['year']):04d}-{int(comic['month']):02d}-{int(comic['day']):02d}"

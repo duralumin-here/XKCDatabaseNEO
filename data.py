@@ -1,5 +1,9 @@
 import requests
 import re
+import metadata
+import sql
+import concurrent
+import sqlite3
 
 # ==================== Retrieving xkcd content ====================
 
@@ -17,6 +21,64 @@ def get_comic(num, session):
 
 # ==================== Retrieving explain xkcd content ====================
 
+# ========== Filling transcript info into table ==========
+
+def fill_transcript_info_missing(database, table):
+    # Retrieves the transcript info for xkcd comics missing in the database
+    _, cur, session = metadata.start_session(database)
+    sql.add_columns(sql.get_transcript_columns(), table, cur)
+    ids = get_transcript_info_missing(table, cur)
+    if len(ids) == 0:
+        print("All comics have transcript information.")
+        return
+    retries = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(get_and_store_transcript_info, id, session, database, table): id for id in ids}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result is not None: # Function returns comic ID when it fails
+                retries.append(result)
+    if not retries:
+        print("Success! All comics successfully processed.")
+        return
+    # Retry more slowly if any are missed
+    fails = []
+    for retry in retries:
+        fails = get_and_store_transcript_info(retry, session, database, table)
+    if not fails:
+        print("Success! All comics successfully processed.")
+    else:
+        print(f"Some comics were not processed: {fails}")
+
+def get_transcript_info_missing(table, cur):
+    # Returns a list of each Dialogue in the table that hasn't been added by metadata
+    last_posted = latest_comic()['num']
+    missing = []
+    for id in range(1, last_posted + 1):
+        result = cur.execute(f"SELECT Description FROM {table} WHERE ComicID = ?", (id,)).fetchone()
+        if not result:
+            missing.append(id)
+    return missing
+
+def get_and_store_transcript_info(id, session, database, table):
+    # Retrives and stores metadata in for a comic based on its id
+    conn = sqlite3.connect(database)
+    cur = conn.cursor()
+    print("Filling transcript information for xkcd " + str(id) + "...")
+    try:
+        data_str = get_tr_txt(id, session)
+        if not data_str:
+            raise ValueError("No transcript text found.")
+        speech, on_screen, desc = get_all_from_tr_txt(data_str)
+        params = (speech, on_screen, desc)
+        statement = sql.get_transcript_statement(table, id)
+        cur.execute(statement, params)
+        conn.commit()
+    except Exception as e:
+        print(f"An error occurred while processing Comic {id}: {e}")
+    finally:
+        conn.close()
+
 # ========== Getting specific transcript text  ==========
 
 def get_tr_txt(num, session):
@@ -24,10 +86,10 @@ def get_tr_txt(num, session):
     try:
         data = get_transcript_page(num, session)
         if not data:
-            return "Transcript not found"
+            return None
         return str(data['parse']['wikitext'])
     except:
-        return "Transcript not found"
+        return None
 
 def get_all_from_tr_txt(data_str):
     transcript = get_transcript_from_tr_txt(data_str)
@@ -36,26 +98,38 @@ def get_all_from_tr_txt(data_str):
     description = []
     on_screen = []
     # It looks scary, but it just looks for names of one or more words followed by a colon,
-    # whitespace, and character. It can contain dashes, parentheticals/bracketed statements, and an honorific.
-    speech_search = r"^(?:(?:[\w-]{1,4}\.\s)?[\w-]+(\s[\w-]+)*)\s?(?:(?:\[|\)).+\s*(?:\]|\)))?:\s\S"
+    # whitespace, and character. It can contain dashes, commas, parentheticals/bracketed statements, and an honorific.
+    speech_search = r"^(?:(?:[\w]{2,4}\.\s)?[-',\w]+(\s[-',\w]+)*)\s?(?:(?:\[|\().+\s*(?:\]|\)))?:\s\S"
     for line in lines:
+        # Remove whitespace
+        line = line.strip()
+        line = line.removeprefix(":")
         if len(line) == 0 or line.isspace():
             continue
-        elif line.upper().startswith("MY HOBBY"):
+        elif line.upper().startswith(("MY HOBBY", "CAPTION")):
             on_screen.append(line)
         elif line.startswith("["):
             line = line.replace("[", "")
             line = line.replace("]", "")
             description.append(line)
         elif re.match(speech_search, line):
+            # TODO: Further refine this check
             speech.append(line)
         else:
             on_screen.append(line)
-    # TODO: Check if things are empty and don't try to edit them; also just generally tidy all this
     for list in [speech, description, on_screen]:
         list = list_check(list)
         
-    return '\n'.join(speech), '\n'.join(on_screen), '\n'.join(description)
+    return ('\n'.join(speech), '\n'.join(on_screen), '\n'.join(description))
+
+def is_actually_just_description(line):
+    speech_exceptions = ["AXIS:", "LABEL:", "ARROW:", "LINE:", "SIGN:", "NAME:", "TITLE:", "POSTER:"]
+    for word in speech_exceptions:
+        index = line.upper().find(word)
+        if index != -1:
+            line = line[index + len(word):]  # Adjust this if you want to exclude the word
+            return True, line.strip()
+    return False, line 
 
 def list_check(list):
     if len(list) == 0:
@@ -68,27 +142,23 @@ def list_check(list):
 
 def get_categories_from_tr_txt(data_str):
     # Formats the categories of a comic given its transcript section
-    categories = remove_str_start(data_str, "{{Comic discussion}}")
-    if not categories:
-        return None
-    categories = categories.replace("[[Category:", "")
-    categories = categories.replace("]]", ",")
-    categories = categories.replace("\\n","")
-    categories = categories.replace("\n","")
-    categories = categories.strip("\'} ,\"")
-    return categories.split(",")
+    pattern = r'\[Category:(.*?)\]'
+    categories = re.findall(pattern, data_str)
+    return [category.strip() for category in categories]
 
 def get_transcript_from_tr_txt(data_str):
     # Neatens up the given transcript section of a comic
     data_str = remove_str_start(data_str, "==Transcript==")
+    data_str = remove_str_start(data_str, "== Transcript ==")
     data_str = remove_str_end(data_str, "{{Comic discussion}}")
     for newline in ["\\n:", "\n:", "\\n#", "\n#", "\\n"]:
         data_str = data_str.replace(newline, "\n")
     data_str = data_str.replace("\\'", "'")
     data_str = data_str.replace(" &ndash;", "–")
+    data_str = data_str.replace("&nbsp;", " ")
     data_str = data_str.strip("\n} ")
     # This removes HTML tags from the transcript unless they're part of the comic (thanks Randall...)
-    regex_html_tags = r"((?!<nowiki>.*?)(<[^>]+>)(?!.*?</nowiki>))|(<[^>]+>(?=.*<nowiki>))|(<[^>]*nowiki[^>]*>)"
+    regex_html_tags = r"((?!<nowiki>.*?)(<[^>]+>)(?!(.*?</nowiki>)|>))|(<[^>]+>(?=.*<nowiki>))|(<[^>]*nowiki[^>]*>)"
     data_str = re.sub(regex_html_tags, '', data_str)
     return str(data_str)
 

@@ -25,6 +25,17 @@ def get_metadata_statement(table):
     VALUES (?, ?, ?, ?, ?)
     """
 
+def get_transcript_statement(table, id):
+    # Gets the statement used to insert metadata into the table
+    return f"""UPDATE {table}
+    SET
+        Dialogue = ?,
+        OnScreenText = ?,
+        Description = ?
+    WHERE
+        ComicID = {id}
+    """
+
 def get_metadata_columns():
     # Returns the columns used for metadata (besides ComicID, which is predefined)
     Column = namedtuple('Column', ['name', 'type'])
@@ -33,6 +44,15 @@ def get_metadata_columns():
         Column(name='Date', type='TEXT'),
         Column(name='ImgLink', type='TEXT'),
         Column(name='AltText', type='TEXT'),
+    ]
+
+def get_transcript_columns():
+    # Returns the columns used for metadata (besides ComicID, which is predefined)
+    Column = namedtuple('Column', ['name', 'type'])
+    return [
+        Column(name='Dialogue', type='TEXT'),
+        Column(name='OnScreenText', type='TEXT'),
+        Column(name='Description', type='TEXT'),
     ]
 
 # ========== Making things ==========
