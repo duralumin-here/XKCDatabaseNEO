@@ -1,0 +1,4 @@
+# XKCDatabaseNEO
+This project aims to consolidate information about Randall Munroe's incredible xkcd webcomic into a comprehensive, usable SQLite database. *XKCDatabaseNEO is a work in progress.*
+
+Please note the included licenses: XKCDatabaseNEO itself is under the MIT license, but the xkcd comic is licensed under [Creative Commons Attribution-NonCommercial 2.5 License](https://xkcd.com/license.html) and the explain xkcd wiki is licensed under the [Creative Commons Attribution-ShareAlike 3.0](https://www.explainxkcd.com/wiki/index.php/explain_xkcd:Copyrights). **I am not the creator of xkcd, nor of the explain xkcd wiki. I do not lay any claim of ownership to the content contained in this database, nor do I make any claim as to its accuracy.** Many thanks to Randall Munroe and the explain xkcd wiki for making their content easy to share.
