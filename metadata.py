@@ -11,12 +11,12 @@ import data
 # ========== Main functions ==========
 
 def fill_metadata(database, table):
-    # Fills in the metadata for all comics not already filled in the table
+    # Fills in the specified data for all comics not already filled in the table
     conn, cur, session = start_session(database)
-    prep_table_metadata(table, cur, conn) # Create table and columns if needed
-    ids = get_metadata_missing(table, cur) # Get IDs that don't have metadata filled
-    if len(ids) == 0:
-        print("All comics have metadata.")
+    prep_table(table, cur, conn)
+    ids = get_metadata_missing(table, cur)
+    if not ids or len(ids) == 0:
+        print("Nothing to fill.")
         return
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(get_and_store_metadata, id, session, database, table): id for id in ids}
@@ -30,10 +30,9 @@ def fill_metadata(database, table):
     for retry in retries:
         fails.append(get_and_store_metadata(retry, session, database, table))
     if not fails:
-        print("Success! Metadata filled for all comics.")
+        print("Success! The requested data was filled for all comics.")
     else:
-        print(f"Metadata was not filled for the following comics: {fails}")
-        
+        print(f"The requested data was not filled for the following comics: {fails}")
 
 def get_all_comic_imgs(database, table):
     conn, cur, session = start_session(database)
@@ -77,6 +76,13 @@ def prep_table_metadata(table, cur, conn):
     # Creates and prepares the metadata table
     sql.make_table(cur, table)
     sql.add_columns(sql.get_metadata_columns(), table, cur)
+    conn.commit()
+
+def prep_table(table, cur, conn):
+    # Creates and prepares the entire table
+    sql.make_table(cur, table)
+    sql.add_columns(sql.get_metadata_columns(), table, cur)
+    sql.add_columns(sql.get_transcript_columns(), table, cur)
     conn.commit()
 
 def get_metadata_params(id, session):

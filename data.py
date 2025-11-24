@@ -4,6 +4,7 @@ import metadata
 import sql
 import concurrent
 import sqlite3
+import time
 
 # ==================== Retrieving xkcd content ====================
 
@@ -50,6 +51,33 @@ def fill_transcript_info_missing(database, table):
     else:
         print(f"Some comics were not processed: {fails}")
 
+def fill_category_info_missing(database, table):
+    # Retrieves the transcript info for xkcd comics missing in the database
+    _, cur, session = metadata.start_session(database)
+    sql.add_columns(sql.get_transcript_columns(), table, cur)
+    ids = get_category_info_missing(table, cur)
+    if len(ids) == 0:
+        print("All comics have categories.")
+        return
+    retries = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(get_and_store_categories, id, session, database, table): id for id in ids}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result is not None: # Function returns comic ID when it fails
+                retries.append(result)
+    if not retries:
+        print("Success! All comics successfully processed.")
+        return
+    # Retry more slowly if any are missed
+    fails = []
+    for retry in retries:
+        fails = get_and_store_categories(retry, session, database, table)
+    if not fails:
+        print("Success! All comics successfully processed.")
+    else:
+        print(f"Some comics were not processed: {fails}")
+
 def get_transcript_info_missing(table, cur):
     # Returns a list of each Dialogue in the table that hasn't been added by metadata
     last_posted = latest_comic()['num']
@@ -58,6 +86,21 @@ def get_transcript_info_missing(table, cur):
         result = cur.execute(f"SELECT Description FROM {table} WHERE ComicID = ?", (id,)).fetchone()
         if not result:
             missing.append(id)
+        else:
+            if not result[0]:
+                missing.append(id)            
+    return missing
+
+def get_category_info_missing(table, cur):
+    # Returns a list of each Dialogue in the table that hasn't been added by metadata
+    last_posted = latest_comic()['num']
+    missing = []
+    for id in range(1, last_posted + 1):
+        result = cur.execute(f"SELECT Categories FROM {table} WHERE ComicID = ?", (id,)).fetchone()
+        if not result or not result[0]:
+            missing.append(id) 
+        else:
+            time.sleep(0.5)       
     return missing
 
 def get_and_store_transcript_info(id, session, database, table):
@@ -140,11 +183,57 @@ def list_check(list):
         list[-1] = list[-1].removesuffix("'")
     return list
 
-def get_categories_from_tr_txt(data_str):
-    # Formats the categories of a comic given its transcript section
-    pattern = r'\[Category:(.*?)\]'
-    categories = re.findall(pattern, data_str)
-    return [category.strip() for category in categories]
+def get_and_store_categories(id, session, database, table):
+    conn = sqlite3.connect(database)
+    cur = conn.cursor()
+    print("Filling category information for xkcd " + str(id) + "...")
+    try:
+        category_data = get_category_data(id, session)
+        if not category_data:
+            raise ValueError("No categories found.")
+        categories = categories_from_data(category_data)
+        nameString = '"{}"'.format('";"'.join(categories)) 
+        final = nameString.replace("Category:", "")
+        final2 = final.replace("\"", "")
+        final2 = final2.replace("All comics;", "")
+        final2 = final2.replace("All pages;", "")
+        statement = f"UPDATE {table} SET Categories = ? WHERE ComicID = {id}"
+        cur.execute(statement, (final2,))
+        conn.commit()
+    except Exception as e:
+        print(f"An error occurred while processing Comic {id}: {e}")
+    finally:
+        conn.close()
+
+def categories_from_data(category_data):
+    page_id = next(iter(category_data['query']['pages']))
+    categories = category_data['query']['pages'][page_id].get('categories', [])
+    return [category['title'] for category in categories]
+
+def get_category_data(num, session):
+    # Returns the JSON category data for a comic of given number
+    URL = "https://www.explainxkcd.com/wiki/api.php"
+    try:
+        page = format_page_title(num, session)
+    except:
+        print("Error getting categories: Invalid ID")
+    PARAMS = {
+                "action": "query",
+                "format": "json",
+                "titles": page,
+                "prop": "categories"
+            }
+    R = session.get(url=URL, params=PARAMS)
+    return R.json()
+
+def format_categories(data):
+    try:
+        page_id = next(iter(data['query']['pages']))
+        categories = data['query']['pages'][page_id].get('categories', [])
+        category_titles = [category['title'] for category in categories]
+        return category_titles
+    except:
+        return
 
 def get_transcript_from_tr_txt(data_str):
     # Neatens up the given transcript section of a comic

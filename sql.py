@@ -47,12 +47,13 @@ def get_metadata_columns():
     ]
 
 def get_transcript_columns():
-    # Returns the columns used for metadata (besides ComicID, which is predefined)
+    # Returns the columns used for explain xkcd data (besides ComicID, which is predefined)
     Column = namedtuple('Column', ['name', 'type'])
     return [
         Column(name='Dialogue', type='TEXT'),
         Column(name='OnScreenText', type='TEXT'),
         Column(name='Description', type='TEXT'),
+        Column(name='Categories', type='TEXT'),
     ]
 
 # ========== Making things ==========
