@@ -1,7 +1,3 @@
 # XKCDatabase NEO
 
-A new Flutter project.
-
-## Getting Started
-
-FlutterFlow projects are built to run on the Flutter _stable_ release.
+This project started as a few Python scripts to make a comprehensive, usable SQLite database consolidating information about Randall Munroe's incredible xkcd webcomic. Now, using that SQLite database, I'm developing a Flutter mobile app that will let people view, sort through, and share comics quickly and easily. *XKCDatabase NEO is a work in progress.*
